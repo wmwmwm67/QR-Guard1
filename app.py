@@ -112,7 +112,7 @@ with tab_register:
 
             # This is the link you'd encode in a QR code.
             # For local demo it uses localhost. For real use, replace with your deployed URL.
-       scan_url = f"{st.get_url()}?tag={tag_id}"
+            scan_url = f"{st.get_url()}?tag={tag_id}"
 
             st.write("**Scan URL (put this into a QR code):**")
             st.code(scan_url)
