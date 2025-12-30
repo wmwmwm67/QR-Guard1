@@ -1,106 +1,55 @@
 import streamlit as st
-import sqlite3
 import qrcode
 import io
 from datetime import datetime
 
-# =========================
-# CONFIG
-# =========================
 APP_BASE_URL = "https://qr-guard1-42dkbzqoeonc2qm6aczxbu.streamlit.app"
-DB_PATH = "qrguard.db"
 
-# =========================
-# DATABASE
-# =========================
-def get_db():
-    return sqlite3.connect(DB_PATH, check_same_thread=False)
-
-def init_db():
-    conn = get_db()
-    c = conn.cursor()
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS tags (
-            tag_id TEXT PRIMARY KEY,
-            contact TEXT,
-            note TEXT
-        )
-    """)
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS messages (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            tag_id TEXT,
-            message TEXT,
-            time TEXT
-        )
-    """)
-    conn.commit()
-
-def upsert_tag(tag_id, contact, note):
-    conn = get_db()
-    c = conn.cursor()
-    c.execute("""
-        INSERT INTO tags (tag_id, contact, note)
-        VALUES (?, ?, ?)
-        ON CONFLICT(tag_id) DO UPDATE SET
-        contact=excluded.contact,
-        note=excluded.note
-    """, (tag_id, contact, note))
-    conn.commit()
-
-def get_tag(tag_id):
-    conn = get_db()
-    c = conn.cursor()
-    c.execute("SELECT contact, note FROM tags WHERE tag_id=?", (tag_id,))
-    return c.fetchone()
-
-def save_message(tag_id, message):
-    conn = get_db()
-    c = conn.cursor()
-    c.execute(
-        "INSERT INTO messages (tag_id, message, time) VALUES (?, ?, ?)",
-        (tag_id, message, datetime.now().strftime("%Y-%m-%d %H:%M"))
-    )
-    conn.commit()
-
-# =========================
-# QR CODE
-# =========================
-def make_qr_png(url):
-    qr = qrcode.make(url)
+def make_qr_png(url: str) -> bytes:
+    img = qrcode.make(url)
     buf = io.BytesIO()
-    qr.save(buf, format="PNG")
+    img.save(buf, format="PNG")
     return buf.getvalue()
 
-# =========================
-# APP START
-# =========================
-st.set_page_config(page_title="QR-Guard", page_icon="🔐")
-init_db()
+st.set_page_config(page_title="QR-Guard", page_icon="🔐", layout="centered")
 
-query_params = st.experimental_get_query_params()
-tag_from_qr = query_params.get("tag", [None])[0]
+# ---------------------------
+# Demo "database" in memory
+# ---------------------------
+if "tags" not in st.session_state:
+    st.session_state.tags = {}          # {tag_id: {"contact":..., "note":...}}
+if "messages" not in st.session_state:
+    st.session_state.messages = {}      # {tag_id: [{"time":..., "text":..., "from":...}, ...]}
 
-tab_owner, tab_finder = st.tabs(["📄 Owner: Register Tag", "🔍 Finder: Found Item"])
+# Read tag from QR link
+tag_from_qr = st.query_params.get("tag", "")
 
-# =========================
+st.title("🔐 QR-Guard (Cloud Demo)")
+
+tab_owner, tab_finder = st.tabs(["📌 Owner: Register Tag", "🔍 Finder: Found Item"])
+
+# ==========================
 # OWNER TAB
-# =========================
+# ==========================
 with tab_owner:
     st.header("Register your QR-Guard Tag")
-    st.caption("This is a demo. Owner contact stays hidden from finder.")
+    st.caption("Demo version: messages are stored temporarily (good for presentation).")
 
-    tag_id = st.text_input("Tag ID (printed on tag)", placeholder="e.g. QR001")
-    contact = st.text_input("Owner contact (email or phone)")
-    note = st.text_area("Optional note to finder")
+    tag_id = st.text_input("Tag ID (printed on tag)", placeholder="e.g. QR001").strip().upper()
+    contact = st.text_input("Owner contact (email or phone)", placeholder="e.g. 9xxxxxxx or name@email.com").strip()
+    note = st.text_area("Optional note to finder", placeholder="e.g. Please message here, thank you!").strip()
 
     if st.button("Register / Update Tag"):
-        if tag_id and contact:
-            upsert_tag(tag_id.strip(), contact.strip(), note.strip())
+        if not tag_id:
+            st.error("Please enter Tag ID.")
+        elif not contact:
+            st.error("Please enter owner contact.")
+        else:
+            st.session_state.tags[tag_id] = {"contact": contact, "note": note}
             st.success(f"Registered tag: {tag_id}")
 
             scan_url = f"{APP_BASE_URL}/?tag={tag_id}"
-            st.write("**Scan URL (encode this into the QR):**")
+            st.write("**Scan URL (encode this into QR):**")
             st.code(scan_url)
 
             qr_bytes = make_qr_png(scan_url)
@@ -111,27 +60,52 @@ with tab_owner:
                 file_name=f"QR-Guard_{tag_id}.png",
                 mime="image/png"
             )
-        else:
-            st.error("Please enter Tag ID and contact.")
 
-# =========================
+# ==========================
 # FINDER TAB
-# =========================
+# ==========================
 with tab_finder:
-    st.header("Found a QR-Guard Item")
+    st.header("Found an item?")
+    st.caption("Scan QR → this page opens → send message anonymously.")
 
-    tag_id_finder = st.text_input(
-        "Tag ID",
-        value=tag_from_qr if tag_from_qr else "",
-        disabled=bool(tag_from_qr)
-    )
+    # If opened via QR link, auto-fill
+    if tag_from_qr:
+        tag_id_finder = st.text_input("Tag ID", value=tag_from_qr, disabled=True).strip().upper()
+    else:
+        tag_id_finder = st.text_input("Tag ID", placeholder="e.g. QR001").strip().upper()
 
-    message = st.text_area("Message to owner", placeholder="I found your item at ...")
-
-    if st.button("Send Message"):
-        tag = get_tag(tag_id_finder)
-        if tag:
-            save_message(tag_id_finder, message)
-            st.success("Message sent to owner anonymously.")
+    if not tag_id_finder:
+        st.info("Enter a Tag ID (or scan a QR).")
+    else:
+        record = st.session_state.tags.get(tag_id_finder)
+        if not record:
+            st.error("Tag not registered yet.")
         else:
-            st.error("Tag not found.")
+            if record.get("note"):
+                st.write(f"**Owner note:** {record['note']}")
+
+            finder_name = st.text_input("Your name (optional)", placeholder="e.g. Sam").strip()
+            msg = st.text_area("Message to owner", placeholder="e.g. I found it at Bugis MRT.").strip()
+
+            if st.button("Send Message"):
+                if not msg:
+                    st.error("Please type a message.")
+                else:
+                    st.session_state.messages.setdefault(tag_id_finder, [])
+                    st.session_state.messages[tag_id_finder].append({
+                        "time": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                        "from": finder_name if finder_name else "Anonymous",
+                        "text": msg
+                    })
+                    st.success("Message sent (demo).")
+
+            st.divider()
+            st.subheader("Recent messages (demo log)")
+            msgs = st.session_state.messages.get(tag_id_finder, [])
+            if not msgs:
+                st.caption("No messages yet.")
+            else:
+                for m in reversed(msgs[-10:]):
+                    st.write(f"**{m['from']}** • {m['time']}")
+                    st.write(m["text"])
+                    st.divider()
