@@ -112,7 +112,7 @@ with tab_register:
 
             # This is the link you'd encode in a QR code.
             # For local demo it uses localhost. For real use, replace with your deployed URL.
-            scan_url = f"http://localhost:8501/?tag={tag_id}"
+            scan_url = f"https://qr-guard1.streamlit.app/?tag={tag_id}"
             st.write("**Scan URL (put this into a QR code):**")
             st.code(scan_url)
 
